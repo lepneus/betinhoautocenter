@@ -179,12 +179,19 @@ body:not(.in-test) .user-switch-avatar{background:#264934;color:#bcf7d2}
 <div id="overlay"></div><div class="toast-zone" id="toasts" aria-live="polite"></div>
 <script>
 // ===== CONFIGURAÇÃO FIREBASE =====
-// Quando o cliente tiver o Firebase, substitua null pelo objeto de configuração do aplicativo Web.
-// Ex.: const FIREBASE_CONFIG = { apiKey:'...', authDomain:'...', projectId:'...', appId:'...' };
-// O sistema funciona localmente enquanto essa configuração não estiver preenchida.
+// Configuração pública Web do projeto Betinho Auto Center (Firebase).
+// O Usuário de teste segue isolado e não acessa o banco da empresa.
+// Para usar os dados reais, entre com e-mail e senha autorizados no Firebase Authentication.
 // NUNCA insira senhas, certificados fiscais ou chaves privadas aqui.
-const FIREBASE_CONFIG = null;
-const VERSION = '1.3.0-betinho-usuario-teste';
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyDlDRs4q5Rf_vp7i6_z5nNUmpXvm-IekN8",
+  authDomain: "betinho-auto-center.firebaseapp.com",
+  projectId: "betinho-auto-center",
+  storageBucket: "betinho-auto-center.firebasestorage.app",
+  messagingSenderId: "527573724335",
+  appId: "1:527573724335:web:96c213602ba85868fa385a"
+};
+const VERSION = '1.4.0-betinho-firebase-configurado';
 // A versão anterior usa KEY. Não escrevemos nem apagamos esses dados antigos.
 const KEY = 'prisma_gestao_mei_v1';
 const TEST_KEY = 'betinho_auto_center_dados_teste_v1';
