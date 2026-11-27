@@ -321,7 +321,7 @@ const FIREBASE_CONFIG = {
   messagingSenderId: "527573724335",
   appId: "1:527573724335:web:96c213602ba85868fa385a"
 };
-const VERSION = '2.1.0-betinho-alterar-email';
+const VERSION = '2.2.0-betinho-edicao-guia';
 // A versão anterior usa KEY. Não escrevemos nem apagamos esses dados antigos.
 const KEY = 'prisma_gestao_mei_v1';
 const TEST_KEY = 'betinho_auto_center_dados_teste_v1';
@@ -652,7 +652,7 @@ function accountDayGroups(clientId){
  return [...map].sort((a,b)=>String(b[0]).localeCompare(String(a[0])));
 }
 function accountDayTotals(orders){
- const entries=orders.flatMap(o=>(o.itens||[]).map(it=>({...it,placa:o.placa,veiculo:o.veiculo,orderId:o.id})));
+ const entries=orders.flatMap(o=>(o.itens||[]).map((it,lineIndex)=>({...it,placa:o.placa,veiculo:o.veiculo,orderId:o.id,lineIndex,canEdit:isOrderPending(o)})));
  return {entries,pecas:total(entries.filter(i=>i.tipo==='peca'),i=>val(i.qtd)*val(i.preco)),servicos:total(entries.filter(i=>i.tipo!=='peca'),i=>val(i.qtd)*val(i.preco)),valor:total(entries,i=>val(i.qtd)*val(i.preco))};
 }
 function openClientLedger(clientId){
@@ -673,13 +673,101 @@ function openClientDay(clientId,day){
  const pendingAmount=total(pending,orderTotal);
  const payDate=(paid[0]?.recebidoEm||'');
  showModal('Guia do cliente • '+fmtDate(day),`<div class="notice"><b>${esc(c.nome)}</b> • ${fmtDate(day)}<br>${esc([c.documento,c.telefone].filter(Boolean).join(' • '))}</div>
- <div class="table-wrap"><table class="data-table"><thead><tr><th>Tipo</th><th>Descrição / veículo</th><th>Qtd.</th><th>Valor unit.</th><th>Total</th></tr></thead><tbody>
- ${entries.map(it=>`<tr><td>${it.tipo==='peca'?'Peça':'Mão de obra'}</td><td><b>${esc(it.nome)}</b><div class="secondary">${esc([it.placa,it.veiculo,it.observacao].filter(Boolean).join(' • '))}</div></td><td>${esc(it.qtd)}</td><td>${money(it.preco)}</td><td class="amount">${money(val(it.qtd)*val(it.preco))}</td></tr>`).join('')}</tbody></table></div>
+ <div class="table-wrap"><table class="data-table"><thead><tr><th>Tipo</th><th>Descrição / veículo</th><th>Qtd.</th><th>Valor unit.</th><th>Total</th><th>Ajustar</th></tr></thead><tbody>
+ ${entries.map(it=>`<tr><td>${it.tipo==='peca'?'Peça':'Mão de obra'}</td><td><b>${esc(it.nome)}</b><div class="secondary">${esc([it.placa,it.veiculo,it.observacao].filter(Boolean).join(' • '))}</div></td><td>${esc(it.qtd)}</td><td>${money(it.preco)}</td><td class="amount">${money(val(it.qtd)*val(it.preco))}</td><td>${it.canEdit?`<button type="button" class="btn mini light" title="Corrigir lançamento pendente" onclick="showPendingLineEdit('${esc(it.orderId)}',${it.lineIndex})">${icon('edit')} Editar</button>`:'<span class="tag green">Recebido</span>'}</td></tr>`).join('')}</tbody></table></div>
+ ${pending.length?'<div class="hint" style="margin-top:10px">Para corrigir um lançamento pendente, clique em <b>Editar</b> ao lado da peça ou do serviço. As alterações atualizam o total da guia; o financeiro ainda não é movimentado.</div>':''}
  <div class="statrow"><span>Total de peças</span><b>${money(pecas)}</b></div><div class="statrow"><span>Mão de obra / serviços</span><b>${money(servicos)}</b></div><div class="statrow" style="font-size:18px"><b>Total geral</b><b>${money(valor)}</b></div>
  ${paid.length?`<div class="notice" style="margin-top:14px">${paid.length} ficha(s) recebida(s)${payDate?' em '+fmtDate(payDate):''}. ${paid.map(o=>esc(o.pagamento?.metodo||'')).filter(Boolean).join(', ')}</div>`:''}
  ${pending.length?`<div class="notice warn" style="margin-top:12px"><b>Pendente: ${money(pendingAmount)}</b> — nada é lançado no caixa antes de confirmar.</div><form id="receiveForm" class="field-grid" style="margin-top:16px"><div class="wide form-section">Finalizar recebimento</div>${paymentFields({})}<div class="wide hint">Parcelas só se aplicam a crédito. Pix e dinheiro entram no caixa agora; débito e crédito ficam na previsão da maquininha até a baixa.</div><div class="wide modal-foot"><button type="button" class="btn light" onclick="printClientDay('${clientId}','${day}')">${icon('receipt')}Imprimir / PDF</button><button class="btn primary" type="submit" id="receiveConfirm">${icon('check')}Confirmar recebimento de ${money(pendingAmount)}</button></div></form>`:`<div class="modal-foot"><button class="btn light" onclick="printClientDay('${clientId}','${day}')">${icon('receipt')}Imprimir / salvar PDF</button></div>`}
  <div class="modal-foot"><button class="btn" onclick="openClientLedger('${clientId}')">Voltar ao extrato</button></div>`,true);
  const f=document.getElementById('receiveForm');if(f)f.onsubmit=async e=>{e.preventDefault();const fd=Object.fromEntries(new FormData(f));await receiveClientDay(clientId,day,fd.metodo,Number(fd.parcelas||1))};
+}
+// Correções na guia do cliente: permitidas somente ANTES do recebimento.
+// Usa a mesma coleção 'ordens' e mantém registro do motivo da alteração.
+function showPendingLineEdit(orderId,lineIndex){
+ const o=state.ordens.find(x=>x.id===orderId);
+ if(!o||!isOrderPending(o)){toast('Esse atendimento já foi recebido ou cancelado e não pode ser alterado aqui.','error');return}
+ const line=o.itens?.[lineIndex];if(!line){toast('Item não encontrado. Abra a guia novamente.','error');return}
+ const c=state.clientes.find(x=>x.id===o.cliente);
+ showModal('Corrigir item pendente • '+(c?.nome||'Cliente'),`<form id="pendingLineForm" class="field-grid">
+ <div class="wide notice"><b>Atendimento #${esc(o.numero)}</b> • ${fmtDate(o.data)}<br>Corrija a peça ou o serviço antes de receber. Se alterar a placa ou o carro, a mudança vale para todos os itens desta ficha.</div>
+ <div class="field"><label for="pendingLineType">Tipo de item</label><select class="select" id="pendingLineType" name="tipo"><option value="peca" ${line.tipo==='peca'?'selected':''}>Peça</option><option value="servico" ${line.tipo!=='peca'?'selected':''}>Serviço / mão de obra</option></select></div>
+ <div class="field"><label for="pendingLineName">Descrição da peça ou serviço</label><input id="pendingLineName" class="input" name="nome" type="text" list="pendingLineCatalog" value="${esc(line.nome)}" required autocomplete="off" placeholder="Digite o nome"><datalist id="pendingLineCatalog"></datalist><small>Peças precisam existir no cadastro para a baixa de estoque.</small></div>
+ <div class="field"><label for="pendingLineQty">Quantidade</label><input class="input" id="pendingLineQty" name="qtd" type="number" min="0.01" step="0.01" value="${esc(line.qtd)}" required></div>
+ <div class="field"><label for="pendingLinePrice">Valor unitário (R$)</label><input class="input" id="pendingLinePrice" name="preco" type="number" min="0" step="0.01" value="${esc(line.preco)}" required></div>
+ <div class="field"><label for="pendingLinePlate">Placa do veículo (se houver)</label><input class="input" id="pendingLinePlate" name="placa" maxlength="8" style="text-transform:uppercase" value="${esc(o.placa||'')}" placeholder="ABC1D23"></div>
+ <div class="field"><label for="pendingLineCar">Veículo / modelo</label><input class="input" id="pendingLineCar" name="veiculo" value="${esc(o.veiculo||'')}" placeholder="Modelo do carro"></div>
+ <div class="wide"><label for="pendingLineReason" style="display:block;margin-bottom:6px">Motivo da correção</label><input class="input" id="pendingLineReason" name="motivo" type="text" maxlength="180" placeholder="Ex.: quantidade lançada errada" required></div>
+ <div class="wide hint"><span id="pendingLinePreview">Total deste item: ${money(val(line.qtd)*val(line.preco))}</span> • Essa alteração não recebe pagamento nem baixa estoque.</div>
+ <div class="wide modal-foot" style="justify-content:space-between;flex-wrap:wrap"><button class="btn danger" type="button" id="pendingRemoveBtn">${icon('trash')} Remover item</button><div class="form-row-actions"><button class="btn" type="button" onclick="openClientDay('${esc(o.cliente)}','${esc(o.data)}')">Cancelar</button><button class="btn primary" id="pendingSaveBtn" type="submit">${icon('check')} Salvar correção</button></div></div>
+ </form>`,true);
+ const form=document.getElementById('pendingLineForm');
+ const updateCatalog=()=>{
+  const type=form.elements.tipo.value;
+  document.getElementById('pendingLineCatalog').innerHTML=(type==='peca'?state.pecas:state.servicos).map(p=>`<option value="${esc(p.nome)}"></option>`).join('');
+ };
+ const updateTotal=()=>{document.getElementById('pendingLinePreview').textContent='Total deste item: '+money(val(form.elements.qtd.value)*val(form.elements.preco.value))};
+ form.elements.tipo.onchange=updateCatalog;updateCatalog();
+ form.elements.nome.addEventListener('change',()=>{
+  const type=form.elements.tipo.value;
+  const catalog=(type==='peca'?state.pecas:state.servicos);
+  const found=catalog.find(p=>workLookupText(p.nome)===workLookupText(form.elements.nome.value));
+  if(found && (workLookupText(found.nome)!==workLookupText(line.nome)||type!==line.tipo)){
+   form.elements.preco.value=val(type==='peca'?found.preco:found.valor);updateTotal();
+  }
+ });
+ form.elements.qtd.addEventListener('input',updateTotal);
+ form.elements.preco.addEventListener('input',updateTotal);
+ form.onsubmit=async e=>{
+  e.preventDefault();
+  const f=Object.fromEntries(new FormData(form));
+  const motivo=String(f.motivo||'').trim();const nome=String(f.nome||'').trim();
+  const qty=Number(f.qtd),price=Number(f.preco);
+  if(!motivo){toast('Informe o motivo da correção.','error');return}
+  if(!nome||!Number.isFinite(qty)||qty<=0||!Number.isFinite(price)||price<0){toast('Confira o nome, quantidade e valor.','error');return}
+  const placa=normalizePlate(f.placa);if(placa&&!validPlate(placa)){toast('Confira a placa (ABC1234 ou ABC1D23).','error');return}
+  const part=f.tipo==='peca'?state.pecas.find(p=>workLookupText(p.nome)===workLookupText(nome)):null;
+  if(f.tipo==='peca'&&!part){toast('Esta peça não está cadastrada no estoque. Cadastre-a em Peças antes de salvar.','error');return}
+  const nextLine={...line,tipo:f.tipo,nome,qtd:qty,preco:price,pecaId:part?.id||'',servicoId:f.tipo==='servico'?(state.servicos.find(p=>workLookupText(p.nome)===workLookupText(nome))?.id||''):''};
+  const itens=[...o.itens];itens[lineIndex]=nextLine;
+  const before={item:line,placa:o.placa||'',veiculo:o.veiculo||''};
+  const next={...o,itens,placa,veiculo:String(f.veiculo||'').trim(),atualizadoEm:new Date().toISOString(),historicoEdicoes:[...(o.historicoEdicoes||[]),{data:new Date().toISOString(),motivo,acao:'Corrigir item',antes:before,depois:{item:nextLine,placa,veiculo:String(f.veiculo||'').trim()}}]};
+  const button=document.getElementById('pendingSaveBtn');if(button){button.disabled=true;button.textContent='Salvando...'}
+  const success=await savePendingCorrection(o,next);
+  if(success){openClientDay(o.cliente,o.data);toast('Item corrigido. Total da guia atualizado.')}
+  else if(button){button.disabled=false;button.textContent='Salvar correção'}
+ };
+ document.getElementById('pendingRemoveBtn').onclick=async()=>{
+  const motivo=String(form.elements.motivo.value||'').trim();
+  if(!motivo){toast('Antes de remover, informe o motivo no campo de correção.','error');form.elements.motivo.focus();return}
+  if(!confirm('Remover '+line.nome+' da conta pendente? Esta ação não altera pagamentos já realizados.'))return;
+  const itens=o.itens.filter((_,i)=>i!==lineIndex),cancelado=!itens.length;
+  const next={...o,itens,contaCliente:true,statusFinanceiro:cancelado?'Cancelado':'Pendente',status:cancelado?'Cancelado':o.status,atualizadoEm:new Date().toISOString(),historicoEdicoes:[...(o.historicoEdicoes||[]),{data:new Date().toISOString(),motivo,acao:cancelado?'Cancelar ficha sem itens':'Remover item',antes:{item:line},depois:{item:null}}]};
+  const b=document.getElementById('pendingRemoveBtn');if(b){b.disabled=true;b.textContent='Removendo...'}
+  const success=await savePendingCorrection(o,next);
+  if(success){const remain=clientOrders(o.cliente,o.data);if(remain.length)openClientDay(o.cliente,o.data);else openClientLedger(o.cliente);toast(cancelado?'Lançamento cancelado e guardado no histórico de fichas.':'Item removido da guia pendente.')}
+  else if(b){b.disabled=false;b.textContent='Remover item'}
+ };
+}
+async function savePendingCorrection(previous,next){
+ if(receiptProcessing){toast('Há um recebimento em andamento. Aguarde a conclusão.','error');return false}
+ if(!isOrderPending(state.ordens.find(x=>x.id===previous.id))){toast('A ficha não está mais pendente. Atualize o extrato.','error');return false}
+ if(mode==='teste'){saveOne('ordens',next);return true}
+ if(!cloud.ready||!cloud.user||dataError||pendingOps){toast('Aguarde o Firebase concluir a sincronização antes de editar.','error');return false}
+ pendingOps++;updateBadge();
+ try{
+  const ref=cloud.api.doc(cloud.db,'users',cloud.user.uid,'ordens',previous.id);
+  await cloud.api.runTransaction(cloud.db,async tx=>{
+   const snap=await tx.get(ref);
+   if(!snap.exists()||snap.data().statusFinanceiro!=='Pendente'||snap.data().contaCliente!==true)throw new Error('A ficha já foi recebida ou alterada em outro aparelho.');
+   const savedAt=snap.data().atualizadoEm||'';
+   if(savedAt!==(previous.atualizadoEm||''))throw new Error('A ficha mudou em outro aparelho. Atualize o extrato antes de corrigir.');
+   tx.set(ref,next);
+  });
+  const idx=state.ordens.findIndex(x=>x.id===next.id);if(idx>=0)state.ordens[idx]=next;
+  return true;
+ }catch(err){toast('Não foi possível salvar a correção: '+(err?.message||'Tente novamente.'),'error');return false}
+ finally{pendingOps--;updateBadge()}
 }
 function printClientDay(clientId,day){
  const c=state.clientes.find(x=>x.id===clientId)||{},orders=clientOrders(clientId,day);if(!orders.length)return;
