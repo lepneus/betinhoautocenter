@@ -212,6 +212,18 @@ body:not(.in-test) .user-switch-avatar{background:#264934;color:#bcf7d2}
 .fiscal-audit ul{margin:8px 0;padding-left:22px;font-size:12px;line-height:1.65}
 .fiscal-audit .fiscal-ok{font-size:12px;color:#12805b}
 @media(max-width:720px){.fiscal-audit{padding:12px}.form-section{margin-top:4px}}
+
+/* Busca incremental de clientes e serviços no atendimento */
+.work-combo{position:relative;width:100%}
+.work-combo input[type=text]{font-size:14px}
+.work-combo-results{position:absolute;top:calc(100% + 5px);left:0;right:0;z-index:90;background:#23252b;border:1px solid #d9a64c;border-radius:11px;box-shadow:0 14px 30px #0009;max-height:238px;overflow-y:auto;padding:4px}
+.work-combo-results[hidden]{display:none!important}
+.work-combo-item{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-height:43px;padding:10px 12px;text-align:left;color:#f4f4f5;background:transparent;border:0;border-radius:8px;cursor:pointer;white-space:normal}
+.work-combo-item span{min-width:0;overflow-wrap:anywhere}
+.work-combo-item small{color:#a8adbb;font-size:10px;white-space:nowrap}
+.work-combo-item:hover,.work-combo-item[aria-selected=true]{background:#4b3524;color:#ffcf72}
+.work-combo-empty{padding:12px;color:#b4b7c3;font-size:12px}
+@media(max-width:600px){.work-combo-results{position:relative;top:4px;max-height:210px;box-shadow:none;margin-bottom:6px}}
 </style>
 </head>
 <body class="auth-locked">
@@ -632,45 +644,105 @@ function workServiceCatalog(){
   });
  return {registered,historical,all:[...registered,...historical]};
 }
-function workClientOptions(selected=''){
- const clients=workSortedClients();
- const found=clients.some(c=>String(c.id)===String(selected));
- return `<option value="" ${!selected?'selected':''}>Consumidor / não cadastrado</option>`+
-  (selected&&!found?`<option value="${esc(selected)}" selected>Cliente deste registro não encontrado no cadastro</option>`:'')+
-  clients.map(c=>`<option value="${esc(c.id)}" ${String(c.id)===String(selected)?'selected':''}>${esc(c.nome)}${c.documento?' • final '+esc(onlyDigits(c.documento).slice(-4)):''}</option>`).join('');
+function workLookupText(text){
+ return String(text||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('pt-BR').trim();
+}
+function workClientOptions(selected=''){ // cadastro centralizado; as opções visíveis agora são pesquisáveis
+ return workSortedClients().map(c=>({id:String(c.id),label:String(c.nome),detail:c.documento?'Documento final '+onlyDigits(c.documento).slice(-4):''}));
 }
 function workServiceOptions(selected=''){
- const lists=workServiceCatalog();
- const found=lists.all.some(s=>String(s.selectId)===String(selected));
- const groups=[
-  lists.registered.length?`<optgroup label="Serviços cadastrados">${lists.registered.map(s=>`<option value="${esc(s.selectId)}" ${s.selectId===selected?'selected':''}>${esc(s.nome)}</option>`).join('')}</optgroup>`:'',
-  lists.historical.length?`<optgroup label="Serviços já realizados">${lists.historical.map(s=>`<option value="${esc(s.selectId)}" ${s.selectId===selected?'selected':''}>${esc(s.nome)}</option>`).join('')}</optgroup>`:''
- ];
- return `<option value="" ${!selected?'selected':''}>Serviço livre / digitar nome</option>`+
-  (selected&&!found?`<option value="${esc(selected)}" selected>Serviço deste registro não encontrado</option>`:'')+
-  groups.join('');
+ return workServiceCatalog().all.map(s=>({id:String(s.selectId),label:String(s.nome),detail:s.source==='history'?'Já realizado':'Cadastrado',valor:s.valor}));
+}
+function workComboRefs(which){
+ const key=which==='cliente'?'Client':'Service';
+ return {query:document.getElementById('work'+key+'Search'),hidden:document.getElementById('work'+key+'Id'),results:document.getElementById('work'+key+'Results')};
+}
+function workComboItems(which){
+ if(which==='cliente')return [{id:'',label:'Consumidor / não cadastrado',detail:'Registrar sem cliente cadastrado'},...workClientOptions()];
+ return workServiceOptions();
+}
+function closeWorkSuggestions(which){
+ const {query,results}=workComboRefs(which);
+ if(!query||!results)return;
+ results.hidden=true;query.setAttribute('aria-expanded','false');query.removeAttribute('aria-activedescendant');
+}
+function scheduleWorkClose(which,oldInput){
+ setTimeout(()=>{
+  const {query,results}=workComboRefs(which);
+  // Ignora atrasos de foco de um formulário anterior, inclusive após reabrir o modal.
+  if(query!==oldInput||document.activeElement===query||results?.contains(document.activeElement))return;
+  closeWorkSuggestions(which);
+ },180);
+}
+function renderWorkSuggestions(which,open=true){
+ const {query,results}=workComboRefs(which);if(!query||!results)return;
+ if(!open){closeWorkSuggestions(which);return}
+ const text=workLookupText(query.value),all=workComboItems(which);
+ // Prioriza o começo do nome; também encontra partes do texto e não exige acentos.
+ let matches=all.filter(x=>!text||workLookupText(x.label).includes(text));
+ matches.sort((a,b)=>{
+  let aa=workLookupText(a.label).startsWith(text)?0:1,bb=workLookupText(b.label).startsWith(text)?0:1;
+  return aa-bb; // mantém a ordenação original quando ambos têm a mesma prioridade
+ });
+ matches=matches.slice(0,10);
+ results.innerHTML=matches.length?matches.map((x,i)=>`<button class="work-combo-item" type="button" role="option" id="work-${which}-opt-${i}" aria-selected="${i===0?'true':'false'}" data-value="${esc(x.id)}" onpointerdown="event.preventDefault();chooseWorkItem('${which}',this.dataset.value)" onclick="chooseWorkItem('${which}',this.dataset.value)"><span>${esc(x.label)}</span>${x.detail?`<small>${esc(x.detail)}</small>`:''}</button>`).join('')
+  :`<div class="work-combo-empty">Nenhum ${which==='cliente'?'cliente':'serviço'} encontrado. ${which==='cliente'?'Você pode cadastrar um novo.':'Use + Cadastrar serviço.'}</div>`;
+ results.hidden=false;query.setAttribute('aria-expanded','true');
+ results.dataset.active='0';
+}
+function workSearchInput(which){
+ const {query,hidden}=workComboRefs(which);if(!query||!hidden)return;
+ const selected=workComboItems(which).find(x=>String(x.id)===String(hidden.value));
+ if(!selected||workLookupText(query.value)!==workLookupText(selected.label))hidden.value='';
+ renderWorkSuggestions(which);
+}
+function chooseWorkItem(which,id){
+ const {query,hidden}=workComboRefs(which);if(!query||!hidden)return;
+ const selected=workComboItems(which).find(x=>String(x.id)===String(id));if(!selected)return;
+ hidden.value=selected.id;
+ // Para consumidor não cadastrado, deixa claro que nenhum cadastro foi escolhido.
+ query.value=(which==='cliente'&&!selected.id)?'':selected.label;
+ if(which==='servico')workServiceChanged(selected.id);
+ closeWorkSuggestions(which);
+}
+function workSearchKeyDown(ev,which){
+ if(!['ArrowDown','ArrowUp','Enter','Escape'].includes(ev.key))return;
+ const {query,results}=workComboRefs(which);if(!results||!query)return;
+ if(ev.key==='Escape'){closeWorkSuggestions(which);return}
+ if(results.hidden){if(ev.key==='Enter')return;renderWorkSuggestions(which)}
+ const opts=[...results.querySelectorAll('.work-combo-item')];if(!opts.length)return;
+ ev.preventDefault();
+ let idx=Number(results.dataset.active)||0;
+ if(ev.key==='ArrowDown')idx=Math.min(opts.length-1,idx+1);
+ else if(ev.key==='ArrowUp')idx=Math.max(0,idx-1);
+ else if(ev.key==='Enter'){chooseWorkItem(which,opts[idx].dataset.value);return}
+ results.dataset.active=String(idx);
+ opts.forEach((el,i)=>el.setAttribute('aria-selected',i===idx?'true':'false'));
+ query.setAttribute('aria-activedescendant',opts[idx].id);
+ opts[idx].scrollIntoView({block:'nearest'});
 }
 function workServiceSelectedFromName(name){
  if(!name)return '';
- const match=workServiceCatalog().all.find(s=>String(s.nome).trim().toLocaleLowerCase('pt-BR')===String(name).trim().toLocaleLowerCase('pt-BR'));
+ const match=workServiceCatalog().all.find(s=>workLookupText(s.nome)===workLookupText(name));
  return match?.selectId||'';
 }
 function refreshWorkLists(){
  const form=document.getElementById('workForm');if(!form)return;
- const client=form.elements.cliente,service=form.elements.servicoId;
- const oldClient=client.value,oldService=service.value;
- client.innerHTML=workClientOptions(oldClient);
- service.innerHTML=workServiceOptions(oldService);
- // Se uma lista chegou do Firebase depois de abrir a janela, mostra as novas opções.
+ const client=workComboRefs('cliente'),service=workComboRefs('servico');
+ // Ao receber dados do Firebase, atualiza as sugestões sem apagar texto digitado.
+ if(client.hidden?.value){const match=workComboItems('cliente').find(x=>x.id===client.hidden.value);if(match)client.query.value=match.label}
+ if(service.hidden?.value){const match=workComboItems('servico').find(x=>x.id===service.hidden.value);if(match)service.query.value=match.label}
+ if(client.results&&!client.results.hidden)renderWorkSuggestions('cliente');
+ if(service.results&&!service.results.hidden)renderWorkSuggestions('servico');
  const clientCount=document.getElementById('workClientCount');
  const serviceCount=document.getElementById('workServiceCount');
  if(clientCount)clientCount.textContent=state.clientes.length
-  ?`${workSortedClients().length} cliente(s) no ${mode==='teste'?'usuário de teste':'Firebase da empresa'}.`
+  ?`${workSortedClients().length} cliente(s) disponível(is). Digite para encontrar.`
   :`Nenhum cliente cadastrado no ${mode==='teste'?'usuário de teste':'usuário da empresa'}. Cadastre aqui ou na aba Clientes.`;
  if(serviceCount){const list=workServiceCatalog();
   serviceCount.textContent=list.all.length
-   ?`${list.registered.length} serviço(s) no catálogo${list.historical.length?' e '+list.historical.length+' do histórico':''}. Selecionar preenche nome e valor.`
-   :'Nenhum serviço cadastrado neste usuário. Digite um serviço livre ou cadastre um agora.';
+   ?`${list.all.length} serviço(s) disponível(is). Digite o nome para filtrar; escolher preenche o valor.`
+   :'Nenhum serviço cadastrado neste usuário. Clique em + Cadastrar serviço para continuar.';
  }
 }
 function toggleWorkInline(which){
@@ -691,7 +763,7 @@ function quickSaveWorkClient(){
  };
  if(!existing)saveOne('clientes',c);
  refreshWorkLists();
- document.getElementById('workForm').elements.cliente.value=c.id;
+ chooseWorkItem('cliente',c.id);
  document.getElementById('workNewClient').hidden=true;
  toast(existing?'Cliente existente selecionado':'Cliente cadastrado e selecionado');
 }
@@ -702,8 +774,7 @@ function quickSaveWorkService(){
  const s=existing||{id:uid(),nome:name,valor:val(document.getElementById('workQuickServiceValue').value),descricao:''};
  if(!existing)saveOne('servicos',s);
  refreshWorkLists();
- document.getElementById('workForm').elements.servicoId.value=s.id;
- workServiceChanged(s.id);
+ chooseWorkItem('servico',s.id);
  document.getElementById('workNewService').hidden=true;
  toast(existing?'Serviço existente selecionado':'Serviço cadastrado e selecionado');
 }
@@ -711,21 +782,20 @@ function workServiceChanged(id){
  const f=document.getElementById('workForm');if(!f||!id)return;
  const entry=workServiceCatalog().all.find(s=>s.selectId===id);
  if(!entry)return;
- f.elements.nome.value=entry.nome;
  f.elements.valor.value=val(entry.valor);
-}
-function workServiceNameChanged(){
- const f=document.getElementById('workForm');if(!f)return;
- f.elements.servicoId.value=workServiceSelectedFromName(f.elements.nome.value);
 }
 function showWorkForm(id=null){
  const x=state.atendimentos.find(y=>y.id===id)||{};
- const selectedService=x.servicoId||workServiceSelectedFromName(x.nome);
+ const selectedService=workServiceCatalog().all.some(s=>s.selectId===x.servicoId)?x.servicoId:workServiceSelectedFromName(x.nome);
  showModal(id?'Editar atendimento':'Registrar serviço realizado',`<form id="workForm" class="field-grid">
  <div class="work-environment-note">Cadastros carregados do <b>${mode==='teste'?'USUÁRIO DE TESTE (este navegador)':'USUÁRIO DA EMPRESA (Firebase)'}</b>. Os usuários não compartilham clientes nem serviços.</div>
  <div class="field">
   <div class="work-field-title"><label for="workClient">Cliente</label><button class="work-add-btn" type="button" onclick="toggleWorkInline('cliente')">+ Cadastrar cliente</button></div>
-  <select class="select" id="workClient" name="cliente">${workClientOptions(x.cliente||'')}</select>
+  <div class="work-combo">
+   <input class="input" id="workClientSearch" type="text" autocomplete="off" placeholder="Digite o nome do cliente..." role="combobox" aria-autocomplete="list" aria-controls="workClientResults" aria-expanded="false" onfocus="renderWorkSuggestions('cliente')" oninput="workSearchInput('cliente')" onkeydown="workSearchKeyDown(event,'cliente')" onblur="scheduleWorkClose('cliente',this)">
+   <input type="hidden" name="cliente" id="workClientId" value="${esc(x.cliente||'')}">
+   <div class="work-combo-results" id="workClientResults" role="listbox" hidden></div>
+  </div>
   <p id="workClientCount" class="work-select-note"></p>
  </div>
  ${field('Data do serviço','data','date',x.data||dateToday(),true)}
@@ -735,12 +805,15 @@ function showWorkForm(id=null){
    <div class="field"><label for="workQuickClientPhone">Telefone (opcional)</label><input class="input" id="workQuickClientPhone" type="tel"></div>
    <div class="work-inline-actions"><button type="button" class="btn" onclick="toggleWorkInline('cliente')">Cancelar</button><button type="button" class="btn primary" onclick="quickSaveWorkClient()">Salvar cliente</button></div>
  </div>
- <div class="field">
+ <div class="field wide">
   <div class="work-field-title"><label for="workServicePick">Usar serviço cadastrado</label><button class="work-add-btn" type="button" onclick="toggleWorkInline('servico')">+ Cadastrar serviço</button></div>
-  <select class="select" id="workServicePick" name="servicoId" onchange="workServiceChanged(this.value)">${workServiceOptions(selectedService)}</select>
+  <div class="work-combo">
+   <input class="input" id="workServiceSearch" type="text" autocomplete="off" placeholder="Digite o nome do serviço..." role="combobox" aria-autocomplete="list" aria-controls="workServiceResults" aria-expanded="false" onfocus="renderWorkSuggestions('servico')" oninput="workSearchInput('servico')" onkeydown="workSearchKeyDown(event,'servico')" onblur="scheduleWorkClose('servico',this)">
+   <input type="hidden" name="servicoId" id="workServiceId" value="${esc(selectedService||'')}">
+   <div class="work-combo-results" id="workServiceResults" role="listbox" hidden></div>
+  </div>
   <p id="workServiceCount" class="work-select-note"></p>
  </div>
- <div class="field"><label for="f_nome">Nome do serviço</label><input class="input" id="f_nome" name="nome" type="text" value="${esc(x.nome||'')}" onchange="workServiceNameChanged()" placeholder="Selecione acima ou digite o serviço" required></div>
  <div id="workNewService" class="work-inline-editor" hidden><h3>Cadastro rápido no catálogo</h3>
    <div class="field"><label for="workQuickServiceName">Nome do serviço</label><input class="input" id="workQuickServiceName" type="text" placeholder="Ex.: troca de óleo"></div>
    <div class="field"><label for="workQuickServiceValue">Preço padrão (R$)</label><input class="input" id="workQuickServiceValue" type="number" min="0" step="0.01" value="0"></div>
@@ -753,8 +826,11 @@ function showWorkForm(id=null){
  document.getElementById('workForm').onsubmit=e=>{
   e.preventDefault();
   const f=Object.fromEntries(new FormData(e.target));
-  const obj={...x,...f,id:id||uid(),nome:String(f.nome||'').trim(),valor:val(f.valor),parcelas:Number(f.parcelas||1)};
-  if(!obj.nome){toast('Informe o nome do serviço.','error');return}
+  if(document.getElementById('workClientSearch')?.value.trim()&&!f.cliente){toast('Selecione o cliente na lista ou cadastre um novo.','error');return}
+  const selected=workServiceCatalog().all.find(s=>s.selectId===f.servicoId);
+  if(f.cliente&&!state.clientes.some(c=>String(c.id)===String(f.cliente))){toast('Selecione um cliente válido na lista.','error');return}
+  if(!selected){toast('Selecione um serviço cadastrado ou cadastre um agora.','error');return}
+  const obj={...x,...f,id:id||uid(),nome:String(selected.nome||'').trim(),valor:val(f.valor),parcelas:Number(f.parcelas||1)};
   if(paymentChanged(x,obj,obj.valor)&&receiptAlreadyConfirmed(x.id)&&!confirm('Este atendimento tem recebimento de cartão confirmado. Alterar dados de pagamento vai recriar as parcelas e apagar as confirmações anteriores. Continuar?'))return;
   saveOne('atendimentos',obj);
   if(paymentChanged(x,obj,obj.valor)||!id)refreshReceivables(obj,'serviço',obj.valor);
